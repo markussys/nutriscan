@@ -1,0 +1,11 @@
+services:
+  nutriscan:
+    build: .
+    container_name: nutriscan
+    ports:
+      - "8080:80"    # http://localhost:8080  (camera works on localhost)
+      - "8443:443"   # https://<your-pc-ip>:8443 (for testing on your phone)
+    volumes:
+      # Live-mount the app so edits show up on refresh without rebuilding
+      - ./public:/usr/share/nginx/html:ro
+    restart: unless-stopped
