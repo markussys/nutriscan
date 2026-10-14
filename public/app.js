@@ -27,14 +27,42 @@ function toast(msg) {
 
 /* ================= config ================= */
 
+// `extra` rows are hidden in the nutrition table when the food has no value for them.
 const NUTRIENTS = [
   { key: 'kcal', label: 'Calories', unit: 'kcal' },
   { key: 'protein', label: 'Protein', unit: 'g' },
   { key: 'carbs', label: 'Carbs', unit: 'g' },
   { key: 'sugar', label: 'of which sugars', unit: 'g', sub: true },
   { key: 'fat', label: 'Fat', unit: 'g' },
+  { key: 'satfat', label: 'of which saturated', unit: 'g', sub: true, extra: true },
   { key: 'fiber', label: 'Fiber', unit: 'g' },
   { key: 'salt', label: 'Salt', unit: 'g' },
+  { key: 'sodium', label: 'Sodium', unit: 'mg', extra: true },
+  { key: 'potassium', label: 'Potassium', unit: 'mg', extra: true },
+  { key: 'cholesterol', label: 'Cholesterol', unit: 'mg', extra: true },
+  { key: 'creatine', label: 'Creatine (est.)', unit: 'g', extra: true },
+];
+// Shown in the "More nutrients" panel on Today. `goal` = key in goals, `limit` = staying under is the aim.
+const EXTRAS = [
+  { key: 'sugar', label: 'Sugars', unit: 'g' },
+  { key: 'satfat', label: 'Saturated fat', unit: 'g' },
+  { key: 'fiber', label: 'Fiber', unit: 'g', goal: 'fiber' },
+  { key: 'sodium', label: 'Sodium', unit: 'mg', goal: 'sodium', limit: true },
+  { key: 'potassium', label: 'Potassium', unit: 'mg' },
+  { key: 'cholesterol', label: 'Cholesterol', unit: 'mg' },
+  { key: 'creatine', label: 'Creatine (est.)', unit: 'g', goal: 'creatine', noMissing: true },
+];
+// Typical creatine content of raw meat/fish, g per 100 g (cooking loses roughly 10–30 %).
+// `re` is matched against Open Food Facts category tags to auto-estimate plain meat and fish.
+const CREATINE_EST = [
+  { label: 'Sausage / ham / deli meat', v: 0.25, re: /sausage|\bhams?\b|salami|frankfurter|prepared-meat|cold-cut/ },
+  { label: 'Herring / sprats', v: 0.7, re: /herring|sprat/ },
+  { label: 'Salmon / trout', v: 0.45, re: /salmon|trout/ },
+  { label: 'Tuna', v: 0.4, re: /tuna/ },
+  { label: 'Cod / white fish', v: 0.3, re: /\bcod|pollock|hake|white-fish/ },
+  { label: 'Pork', v: 0.5, re: /pork/ },
+  { label: 'Beef / veal / lamb', v: 0.45, re: /beef|veal|lamb|mutton/ },
+  { label: 'Chicken / turkey', v: 0.35, re: /chicken|turkey|poultr/ },
 ];
 const MACROS = [
   { key: 'protein', label: 'Protein', color: 'var(--protein)' },
@@ -42,7 +70,7 @@ const MACROS = [
   { key: 'fat', label: 'Fat', color: 'var(--fat)' },
 ];
 const MEALS = ['Breakfast', 'Lunch', 'Dinner', 'Snacks'];
-const DEFAULT_GOALS = { kcal: 2000, protein: 120, carbs: 220, fat: 70 };
+const DEFAULT_GOALS = { kcal: 2000, protein: 120, carbs: 220, fat: 70, fiber: 30, sodium: 2300, creatine: 0 };
 
 /* ================= storage ================= */
 
@@ -62,10 +90,12 @@ const store = {
 let goals = { ...DEFAULT_GOALS, ...store.get('goals', {}) };
 let products = store.get('products', {}); // id -> product (scanned + custom)
 let log = store.get('log', {});           // 'YYYY-MM-DD' -> entry[]
+let recipes = store.get('recipes', {});   // id -> saved meal { name, items: [{ productId, name, per100, grams }], cooked }
 
 const saveGoals = () => store.set('goals', goals);
 const saveProducts = () => store.set('products', products);
 const saveLog = () => store.set('log', log);
+const saveRecipes = () => store.set('recipes', recipes);
 
 /* ================= dates ================= */
 
@@ -103,20 +133,42 @@ let currentDay = todayKey();
 
 /* ================= nutrition math ================= */
 
+// A per-100 g value, deriving sodium from salt (salt = sodium × 2.5) for foods saved before sodium existed.
+function nval(per100, key) {
+  const v = per100?.[key];
+  if (v != null) return v;
+  if (key === 'sodium' && per100?.salt != null) return per100.salt * 400;
+  return null;
+}
+
 function totals(entries) {
   const t = Object.fromEntries(NUTRIENTS.map(n => [n.key, 0]));
   for (const e of entries) {
-    for (const n of NUTRIENTS) t[n.key] += (e.per100[n.key] || 0) * e.grams / 100;
+    for (const n of NUTRIENTS) t[n.key] += (nval(e.per100, n.key) || 0) * (e.grams || 0) / 100;
   }
   return t;
+}
+
+// per-100 g values of a mixture; null for nutrients no ingredient has data for
+function combinedPer100(items, weight) {
+  const t = totals(items);
+  return Object.fromEntries(NUTRIENTS.map(n => [n.key,
+    weight > 0 && items.some(i => nval(i.per100, n.key) != null) ? t[n.key] / weight * 100 : null]));
+}
+
+function guessCreatine(tags) {
+  const s = (tags || []).join(' ');
+  if (!/en:(meats|fishes|poultries|seafood)\b/.test(s) || /en:(meals|meat-analogues|plant-based)/.test(s)) return null;
+  return CREATINE_EST.find(c => c.re.test(s))?.v ?? null;
 }
 
 /* ================= Open Food Facts ================= */
 
 const OFF_FIELDS = [
   'code', 'product_name', 'product_name_en', 'product_name_lv', 'generic_name',
-  'brands', 'image_front_small_url', 'image_front_url', 'nutriments', 'serving_quantity',
+  'brands', 'image_front_small_url', 'image_front_url', 'nutriments', 'serving_quantity', 'categories_tags',
 ].join(',');
+const mg = v => { const x = num(v); return x == null ? null : x * 1000; }; // OFF stores minerals in g
 
 async function fetchProduct(code) {
   const res = await fetch(
@@ -135,6 +187,7 @@ function fromOFF(code, p) {
     const kj = num(n['energy-kj_100g']) ?? num(n['energy_100g']);
     if (kj != null) kcal = kj / 4.184;
   }
+  const sodium = mg(n.sodium_100g);
   return {
     id: code,
     barcode: code,
@@ -147,8 +200,13 @@ function fromOFF(code, p) {
       carbs: num(n.carbohydrates_100g),
       sugar: num(n.sugars_100g),
       fat: num(n.fat_100g),
+      satfat: num(n['saturated-fat_100g']),
       fiber: num(n.fiber_100g),
-      salt: num(n.salt_100g),
+      salt: num(n.salt_100g) ?? (sodium == null ? null : sodium / 400),
+      sodium,
+      potassium: mg(n.potassium_100g),
+      cholesterol: mg(n.cholesterol_100g),
+      creatine: guessCreatine(p.categories_tags),
     },
     serving: num(p.serving_quantity) || null,
     source: 'off',
@@ -200,6 +258,7 @@ function show(view) {
 
   if (view === 'today') renderToday();
   if (view === 'scan') {
+    renderRecipes();
     renderFoods();
     if (store.get('autoCamera', false)) startScanner();
   }
@@ -237,6 +296,8 @@ function renderToday() {
       <div class="bar" style="--c:${m.color}"><div style="width:${pct(t[m.key], goals[m.key])}%"></div></div>
     </div>`).join('');
 
+  renderExtras(entries, t);
+
   if (!entries.length) {
     $('#meals').innerHTML = `<div class="card empty">Nothing logged ${currentDay === todayKey() ? 'yet today' : 'on this day'}.<br>Scan a barcode to get started.</div>`;
     return;
@@ -252,7 +313,7 @@ function renderToday() {
           <li data-entry="${esc(e.id)}">
             <div class="grow">
               <div class="name">${esc(e.name)}</div>
-              <div class="muted small">${fmt(e.grams)} g${e.brand ? ' · ' + esc(e.brand) : ''}</div>
+              <div class="muted small">${fmt(e.grams)} g${e.items ? ` · meal of ${e.items.length} food${e.items.length > 1 ? 's' : ''}` : ''}${e.brand ? ' · ' + esc(e.brand) : ''}</div>
             </div>
             <div class="kcal">${fmt((e.per100.kcal || 0) * e.grams / 100, 'kcal')}<small> kcal</small></div>
           </li>`).join('')}
@@ -261,19 +322,41 @@ function renderToday() {
   }).join('');
 }
 
+function renderExtras(entries, t) {
+  const row = x => {
+    const goal = x.goal ? goals[x.goal] : 0;
+    const v = t[x.key];
+    const over = x.limit && goal > 0 && v > goal;
+    const missing = x.noMissing ? 0 : entries.filter(e => nval(e.per100, x.key) == null).length;
+    const noData = missing > 0 && missing === entries.length;
+    return `
+      <div class="extra">
+        <div class="extra-head">
+          <span>${x.label}</span>
+          <span><b class="${over ? 'over' : ''}">${noData ? '–' : fmt(v)}</b>${goal > 0 ? ` / ${goal}` : ''} ${x.unit}${
+            x.key === 'sodium' ? ` <span class="muted small">(${fmt(v / 400)} g salt)</span>` : ''}${
+            missing && !noData ? ` <span class="muted small">· ${missing} without data</span>` : ''}</span>
+        </div>
+        ${goal > 0 ? `<div class="bar${over ? ' over' : ''}"><div style="width:${pct(v, goal)}%"></div></div>` : ''}
+      </div>`;
+  };
+  $('#extras-list').innerHTML = EXTRAS.map(row).join('');
+  $('#extras-preview').textContent = `Sodium ${fmt(t.sodium)} mg · Creatine ${fmt(t.creatine)} g`;
+}
+
 /* ---------- my foods ---------- */
 
 const thumb = p => p.image
   ? `<img class="thumb" src="${esc(p.image)}" alt="" loading="lazy">`
   : `<div class="thumb ph">${esc((p.name || '?').charAt(0).toUpperCase())}</div>`;
 
-function renderFoods() {
-  const q = $('#food-filter').value.trim().toLowerCase();
+function foodListHTML(q) {
+  q = q.trim().toLowerCase();
   const list = Object.values(products)
     .filter(p => !q || `${p.name} ${p.brand || ''} ${p.barcode || ''}`.toLowerCase().includes(q))
     .sort((a, b) => (b.lastUsed || b.updated || 0) - (a.lastUsed || a.updated || 0));
 
-  $('#food-list').innerHTML = list.length
+  return list.length
     ? list.map(p => `
         <li data-product="${esc(p.id)}">
           ${thumb(p)}
@@ -286,6 +369,40 @@ function renderFoods() {
     : `<li class="empty">${q ? 'No matches.' : 'Foods you scan or create will show up here.'}</li>`;
 }
 
+function renderFoods() {
+  $('#food-list').innerHTML = foodListHTML($('#food-filter').value);
+}
+
+/* ---------- my meals ---------- */
+
+// Ingredients follow later edits to the food; the stored copy is only a fallback if the food was deleted.
+function freshItem(it) {
+  const p = products[it.productId];
+  return p
+    ? { productId: p.id, name: p.name, brand: p.brand || '', per100: { ...p.per100 }, grams: it.grams }
+    : { ...it, per100: { ...it.per100 } };
+}
+
+function renderRecipes() {
+  const list = Object.values(recipes)
+    .sort((a, b) => (b.lastUsed || b.updated || 0) - (a.lastUsed || a.updated || 0));
+  $('#recipe-list').innerHTML = list.length
+    ? list.map(r => {
+        const items = r.items.map(freshItem);
+        const raw = items.reduce((s, i) => s + (i.grams || 0), 0);
+        return `
+          <li data-recipe="${esc(r.id)}">
+            <div class="thumb ph">${esc((r.name || '?').charAt(0).toUpperCase())}</div>
+            <div class="grow">
+              <div class="name">${esc(r.name)}</div>
+              <div class="muted small">${items.length} food${items.length > 1 ? 's' : ''} · ${fmt(r.cooked || raw)} g</div>
+            </div>
+            <div class="kcal">${fmt(totals(items).kcal, 'kcal')}<small> kcal</small></div>
+          </li>`;
+      }).join('')
+    : '<li class="empty">Combine your foods into a meal you can log in one go.</li>';
+}
+
 /* ---------- history ---------- */
 
 function renderHistory() {
@@ -296,7 +413,8 @@ function renderHistory() {
     const t = totals(last7.flatMap(k => log[k]));
     const avg = k => t[k] / last7.length;
     $('#history-avg').innerHTML = `Average per logged day (${last7.length} day${last7.length > 1 ? 's' : ''}):<br>
-      <b>${fmt(avg('kcal'), 'kcal')} kcal</b> · P ${fmt(avg('protein'))} g · C ${fmt(avg('carbs'))} g · F ${fmt(avg('fat'))} g`;
+      <b>${fmt(avg('kcal'), 'kcal')} kcal</b> · P ${fmt(avg('protein'))} g · C ${fmt(avg('carbs'))} g · F ${fmt(avg('fat'))} g<br>
+      <span class="small">Fiber ${fmt(avg('fiber'))} g · Sodium ${fmt(avg('sodium'))} mg · Creatine ${fmt(avg('creatine'))} g</span>`;
   } else {
     $('#history-avg').textContent = 'Nothing logged in the last 7 days.';
   }
@@ -356,17 +474,24 @@ function openProduct(product, entry = null) {
 
 function renderSheetTable() {
   const g = num($('#p-grams').value) || 0;
-  const p = sheet.product.per100;
-  const cell = (v, unit) => v == null ? '–' : `${fmt(v, unit)} ${unit}`;
   $('#p-table').innerHTML = `
     <thead><tr><th></th><th>per 100 g</th><th>${fmt(g)} g</th></tr></thead>
-    <tbody>${NUTRIENTS.map(n => `
-      <tr class="${n.sub ? 'sub' : ''} ${n.key === 'kcal' ? 'kcal-row' : ''}">
-        <td>${n.label}</td>
-        <td>${cell(p[n.key], n.unit)}</td>
-        <td><b>${cell(p[n.key] == null ? null : p[n.key] * g / 100, n.unit)}</b></td>
-      </tr>`).join('')}
-    </tbody>`;
+    <tbody>${nutriRows(sheet.product.per100, [100, g])}</tbody>`;
+}
+
+// one column per amount in grams; the last column is bold
+function nutriRows(per100, amounts) {
+  return NUTRIENTS.filter(n => !n.extra || nval(per100, n.key) != null).map(n => {
+    const v = nval(per100, n.key);
+    const cells = amounts.map((g, i) => {
+      const c = v == null ? '–' : `${fmt(v * g / 100, n.unit)} ${n.unit}`;
+      return `<td>${i === amounts.length - 1 ? `<b>${c}</b>` : c}</td>`;
+    });
+    return `
+      <tr class="${n.sub ? 'sub' : ''} ${n.key === 'kcal' ? 'nutri-kcal' : ''}">
+        <td>${n.label}</td>${cells.join('')}
+      </tr>`;
+  }).join('');
 }
 
 function submitProduct(e) {
@@ -402,12 +527,11 @@ function submitProduct(e) {
   show('today');
 }
 
-function deleteEntry() {
-  const { entry } = sheet;
-  log[currentDay] = (log[currentDay] || []).filter(x => x.id !== entry.id);
+function removeEntry(id, dialog) {
+  log[currentDay] = (log[currentDay] || []).filter(x => x.id !== id);
   if (!log[currentDay].length) delete log[currentDay];
   saveLog();
-  productDialog.close();
+  dialog.close();
   renderToday();
   toast('Removed');
 }
@@ -417,7 +541,7 @@ function deleteEntry() {
 const foodDialog = $('#food-dialog');
 const foodForm = $('#food-form');
 const fld = name => foodForm.elements.namedItem(name);
-const PER100_KEYS = ['kcal', 'protein', 'carbs', 'sugar', 'fat', 'fiber', 'salt'];
+const PER100_KEYS = NUTRIENTS.map(n => n.key);
 let editingId = null;
 
 function openFoodEditor(prefill = {}, hint = '') {
@@ -435,9 +559,10 @@ function openFoodEditor(prefill = {}, hint = '') {
   fld('barcode').value = prefill.barcode || '';
   fld('serving').value = prefill.serving ?? '';
   for (const k of PER100_KEYS) {
-    const v = prefill.per100?.[k];
-    fld(k).value = v == null ? '' : Math.round(v * 10) / 10;
+    const v = nval(prefill.per100, k);
+    fld(k).value = v == null ? '' : Math.round(v * 100) / 100;
   }
+  $('#creatine-guess').value = '';
   foodDialog.showModal();
   setTimeout(() => (fld('name').value ? fld('kcal') : fld('name')).focus(), 50);
 }
@@ -475,6 +600,168 @@ function deleteFood() {
   foodDialog.close();
   renderFoods();
   toast('Food deleted');
+}
+
+/* ================= meal builder ================= */
+
+const mealDialog = $('#meal-dialog');
+const pickDialog = $('#pick-dialog');
+// { recipeId, entry?, items, frac }: frac = share of the dish eaten, kept when ingredient amounts change
+let ms = null;
+
+const rawWeight = () => ms.items.reduce((s, i) => s + (i.grams || 0), 0);
+const mealWeight = () => num($('#m-cooked').value) || rawWeight();
+
+function openMeal({ recipe = null, entry = null } = {}) {
+  const src = entry || recipe;
+  ms = {
+    recipeId: entry ? entry.recipeId || null : recipe?.id || null,
+    entry,
+    // a logged meal keeps its own snapshot; a saved meal picks up edits made to its foods
+    items: (src?.items || []).map(it => entry ? { ...it, per100: { ...it.per100 } } : freshItem(it)),
+  };
+  $('#meal-title').textContent = entry ? 'Logged meal' : recipe ? 'Saved meal' : 'New meal';
+  $('#m-name').value = src?.name || '';
+  $('#m-cooked').value = src?.cooked || '';
+  $('#m-meal').value = entry ? entry.meal : guessMeal();
+  const w = mealWeight();
+  ms.frac = entry && w > 0 ? entry.grams / w : 1;
+  $('#m-grams').value = entry ? Math.round(entry.grams) : Math.round(w) || '';
+
+  $('#m-submit').textContent = entry ? 'Save' : 'Add to log';
+  $('#m-delete').textContent = entry ? 'Remove' : 'Delete meal';
+  $('#m-save').hidden = !!entry;
+  renderMealItems();
+  updateMealButtons();
+  mealDialog.showModal();
+  if (!src) setTimeout(() => $('#m-name').focus(), 50);
+}
+
+function updateMealButtons() {
+  $('#m-delete').hidden = !ms.entry && !recipes[ms.recipeId];
+}
+
+const itemKcal = it => fmt((it.per100.kcal || 0) * (it.grams || 0) / 100, 'kcal');
+
+function renderMealItems() {
+  $('#m-items').innerHTML = ms.items.length
+    ? ms.items.map((it, i) => `
+        <li data-i="${i}">
+          <div class="grow">
+            <div class="name">${esc(it.name)}</div>
+            <div class="muted small"><span data-kcal>${itemKcal(it)}</span> kcal</div>
+          </div>
+          <input class="grams" type="number" min="0" step="any" inputmode="decimal" value="${it.grams}" aria-label="Grams of ${esc(it.name)}">
+          <span class="muted small">g</span>
+          <button type="button" class="icon-btn x" data-remove aria-label="Remove ${esc(it.name)}">&times;</button>
+        </li>`).join('')
+    : '<li class="empty">Add foods from your list to build this meal.</li>';
+  renderMealTable();
+}
+
+// ingredient amounts or cooked weight changed: keep the eaten share, update the grams
+function mealWeightChanged() {
+  const w = mealWeight();
+  if (w > 0) $('#m-grams').value = Math.round(ms.frac * w);
+  renderMealTable();
+}
+
+function renderMealTable() {
+  const w = mealWeight();
+  const raw = rawWeight();
+  const eaten = num($('#m-grams').value) || 0;
+  const cooked = num($('#m-cooked').value);
+  $('#m-weight').textContent = !ms.items.length ? ''
+    : cooked ? `Ingredients add up to ${fmt(raw)} g raw; nutrients are spread over the ${fmt(cooked)} g cooked weight.`
+    : `Ingredients add up to ${fmt(raw)} g.`;
+  $('#m-table').innerHTML = ms.items.length ? `
+    <thead><tr><th></th><th>whole<br>${fmt(w)} g</th><th>eaten<br>${fmt(eaten)} g</th></tr></thead>
+    <tbody>${nutriRows(combinedPer100(ms.items, w), [w, eaten])}</tbody>` : '';
+}
+
+function mealSnapshot() {
+  return ms.items.map(({ productId, name, brand, per100, grams }) => ({ productId, name, brand, per100: { ...per100 }, grams }));
+}
+
+function saveRecipe() {
+  const name = $('#m-name').value.trim();
+  if (!name) { toast('Give the meal a name'); $('#m-name').focus(); return false; }
+  if (!ms.items.length) { toast('Add at least one food'); return false; }
+  const id = ms.recipeId || 'meal-' + uid();
+  recipes[id] = {
+    id,
+    name,
+    items: mealSnapshot(),
+    cooked: num($('#m-cooked').value) || null,
+    updated: Date.now(),
+    lastUsed: recipes[id]?.lastUsed,
+  };
+  ms.recipeId = id;
+  saveRecipes();
+  renderRecipes();
+  updateMealButtons();
+  return true;
+}
+
+function submitMeal(e) {
+  e.preventDefault();
+  if (!ms.items.length) { toast('Add at least one food'); return; }
+  const grams = num($('#m-grams').value);
+  if (!(grams > 0)) { toast('Enter how much you ate'); return; }
+  const w = mealWeight();
+  const name = $('#m-name').value.trim();
+
+  // a brand-new meal with a name is saved for next time; tweaks to a saved meal only affect this log entry
+  if (!ms.entry && !ms.recipeId && name) saveRecipe();
+  if (recipes[ms.recipeId]) { recipes[ms.recipeId].lastUsed = Date.now(); saveRecipes(); }
+
+  const data = {
+    recipeId: ms.recipeId,
+    name: name || 'Meal',
+    brand: '',
+    items: mealSnapshot(),
+    cooked: num($('#m-cooked').value) || null,
+    per100: combinedPer100(ms.items, w),
+    grams,
+    meal: $('#m-meal').value,
+  };
+  if (ms.entry) {
+    Object.assign(ms.entry, data);
+    toast('Updated');
+  } else {
+    (log[currentDay] ||= []).push({ id: uid(), ...data, t: Date.now() });
+    toast(`Added ${data.name} · ${fmt(data.per100.kcal * grams / 100, 'kcal')} kcal`);
+  }
+  saveLog();
+  mealDialog.close();
+  show('today');
+}
+
+function deleteMeal() {
+  if (ms.entry) { removeEntry(ms.entry.id, mealDialog); return; }
+  if (!confirm('Delete this saved meal? Days you already logged it on stay as they are.')) return;
+  delete recipes[ms.recipeId];
+  saveRecipes();
+  mealDialog.close();
+  renderRecipes();
+  toast('Meal deleted');
+}
+
+function openPicker() {
+  $('#pick-filter').value = '';
+  $('#pick-list').innerHTML = foodListHTML('');
+  pickDialog.showModal();
+}
+
+function pickFood(p) {
+  const old = mealWeight();
+  ms.items.push({ productId: p.id, name: p.name, brand: p.brand || '', per100: { ...p.per100 }, grams: p.serving || 100 });
+  pickDialog.close();
+  if (!(old > 0)) ms.frac = 1; // first ingredient: default to eating the whole thing
+  renderMealItems();
+  mealWeightChanged();
+  const inputs = $$('#m-items input.grams');
+  inputs.at(-1)?.select();
 }
 
 /* ================= scanner ================= */
@@ -552,7 +839,7 @@ function onScan(text) {
 /* ================= backup ================= */
 
 function exportData() {
-  const data = { app: 'nutriscan', version: 1, exported: new Date().toISOString(), goals, products, log };
+  const data = { app: 'nutriscan', version: 1, exported: new Date().toISOString(), goals, products, recipes, log };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -572,8 +859,9 @@ async function importData(file) {
     if (!confirm('Replace ALL current data with this backup?')) return;
     goals = { ...DEFAULT_GOALS, ...data.goals };
     products = data.products;
+    recipes = data.recipes || {};
     log = data.log;
-    saveGoals(); saveProducts(); saveLog();
+    saveGoals(); saveProducts(); saveRecipes(); saveLog();
     toast('Backup restored');
     fillGoals();
   } catch (err) {
@@ -582,11 +870,12 @@ async function importData(file) {
 }
 
 function clearData() {
-  if (!confirm('Delete ALL foods, logs and goals on this device? This cannot be undone.')) return;
+  if (!confirm('Delete ALL foods, meals, logs and goals on this device? This cannot be undone.')) return;
   goals = { ...DEFAULT_GOALS };
   products = {};
+  recipes = {};
   log = {};
-  saveGoals(); saveProducts(); saveLog();
+  saveGoals(); saveProducts(); saveRecipes(); saveLog();
   fillGoals();
   toast('All data deleted');
 }
@@ -594,7 +883,11 @@ function clearData() {
 /* ================= wiring ================= */
 
 function init() {
-  $('#p-meal').innerHTML = MEALS.map(m => `<option>${m}</option>`).join('');
+  const mealOptions = MEALS.map(m => `<option>${m}</option>`).join('');
+  $('#p-meal').innerHTML = mealOptions;
+  $('#m-meal').innerHTML = mealOptions;
+  $('#creatine-guess').innerHTML = '<option value="">Pick meat or fish…</option>' +
+    CREATINE_EST.map(c => `<option value="${c.v}">${c.label} · ${c.v} g</option>`).join('');
 
   // navigation (tab bar + any [data-goto] button)
   document.addEventListener('click', e => {
@@ -605,7 +898,7 @@ function init() {
   });
 
   // close dialogs when tapping the backdrop
-  for (const d of [productDialog, foodDialog]) {
+  for (const d of [productDialog, foodDialog, mealDialog, pickDialog]) {
     d.addEventListener('click', e => { if (e.target === d) d.close(); });
   }
 
@@ -620,6 +913,7 @@ function init() {
     if (!li) return;
     const entry = (log[currentDay] || []).find(x => x.id === li.dataset.entry);
     if (!entry) return;
+    if (entry.items) { openMeal({ entry }); return; }
     const saved = products[entry.productId];
     openProduct({
       id: entry.productId,
@@ -640,6 +934,11 @@ function init() {
     $('#manual-code').value = '';
   });
   $('#new-food').addEventListener('click', () => openFoodEditor());
+  $('#new-meal').addEventListener('click', () => openMeal());
+  $('#recipe-list').addEventListener('click', e => {
+    const li = e.target.closest('[data-recipe]');
+    if (li && recipes[li.dataset.recipe]) openMeal({ recipe: recipes[li.dataset.recipe] });
+  });
   $('#food-filter').addEventListener('input', renderFoods);
   $('#food-list').addEventListener('click', e => {
     const li = e.target.closest('[data-product]');
@@ -655,7 +954,7 @@ function init() {
     $('#p-grams').value = chip.dataset.g;
     renderSheetTable();
   });
-  $('#p-delete').addEventListener('click', deleteEntry);
+  $('#p-delete').addEventListener('click', () => removeEntry(sheet.entry.id, productDialog));
   $('#p-edit').addEventListener('click', () => {
     const p = products[sheet.product.id];
     productDialog.close();
@@ -665,6 +964,58 @@ function init() {
   // food editor
   foodForm.addEventListener('submit', submitFood);
   $('#food-delete').addEventListener('click', deleteFood);
+  fld('salt').addEventListener('input', () => {
+    const v = num(fld('salt').value);
+    fld('sodium').value = v == null ? '' : Math.round(v * 400);
+  });
+  fld('sodium').addEventListener('input', () => {
+    const v = num(fld('sodium').value);
+    fld('salt').value = v == null ? '' : Math.round(v / 4) / 100;
+  });
+  $('#creatine-guess').addEventListener('change', e => { if (e.target.value) fld('creatine').value = e.target.value; });
+
+  // meal builder
+  $('#meal-form').addEventListener('submit', submitMeal);
+  $('#m-add').addEventListener('click', openPicker);
+  $('#m-save').addEventListener('click', () => { if (saveRecipe()) toast('Meal saved'); });
+  $('#m-delete').addEventListener('click', deleteMeal);
+  $('#m-items').addEventListener('input', e => {
+    const li = e.target.closest('[data-i]');
+    if (!li || !e.target.matches('input.grams')) return;
+    const it = ms.items[li.dataset.i];
+    it.grams = num(e.target.value) || 0;
+    $('[data-kcal]', li).textContent = itemKcal(it);
+    mealWeightChanged();
+  });
+  $('#m-items').addEventListener('click', e => {
+    const li = e.target.closest('[data-i]');
+    if (!li || !e.target.closest('[data-remove]')) return;
+    ms.items.splice(Number(li.dataset.i), 1);
+    renderMealItems();
+    mealWeightChanged();
+  });
+  $('#m-cooked').addEventListener('input', mealWeightChanged);
+  $('#m-grams').addEventListener('input', () => {
+    const w = mealWeight();
+    ms.frac = w > 0 ? (num($('#m-grams').value) || 0) / w : 1;
+    renderMealTable();
+  });
+  $('#m-chips').addEventListener('click', e => {
+    const chip = e.target.closest('[data-f]');
+    if (!chip) return;
+    ms.frac = Number(chip.dataset.f);
+    mealWeightChanged();
+  });
+  $('#pick-filter').addEventListener('input', e => { $('#pick-list').innerHTML = foodListHTML(e.target.value); });
+  $('#pick-list').addEventListener('click', e => {
+    const li = e.target.closest('[data-product]');
+    if (li && products[li.dataset.product]) pickFood(products[li.dataset.product]);
+  });
+
+  // today: remember whether "More nutrients" is open
+  const extras = $('#extras');
+  extras.open = store.get('extrasOpen', false);
+  extras.addEventListener('toggle', () => store.set('extrasOpen', extras.open));
 
   // history
   $('#history-list').addEventListener('click', e => {
@@ -677,7 +1028,7 @@ function init() {
   // settings
   $('#goals-form').addEventListener('submit', e => {
     e.preventDefault();
-    for (const k of Object.keys(DEFAULT_GOALS)) goals[k] = Math.max(0, Math.round(num($('#goal-' + k).value) || 0));
+    for (const k of Object.keys(DEFAULT_GOALS)) goals[k] = Math.max(0, Math.round((num($('#goal-' + k).value) || 0) * 10) / 10);
     saveGoals();
     toast('Goals saved');
   });

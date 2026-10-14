@@ -36,6 +36,12 @@
         <div id="macro-bars" class="macros"></div>
       </div>
 
+      <details id="extras" class="card extras">
+        <summary><b>More nutrients</b><span id="extras-preview" class="muted small"></span></summary>
+        <div id="extras-list"></div>
+        <p class="muted small">Totals only count foods that list the value. Creatine is an estimate: it isn't on food labels.</p>
+      </details>
+
       <div id="meals"></div>
 
       <button class="btn primary block" data-goto="scan">+ Add food</button>
@@ -59,6 +65,14 @@
         <input id="manual-code" inputmode="numeric" autocomplete="off" placeholder="…or type the barcode number" aria-label="Barcode number">
         <button class="btn">Look up</button>
       </form>
+
+      <div class="card">
+        <div class="row space">
+          <h2>My meals</h2>
+          <button id="new-meal" class="btn small">+ New meal</button>
+        </div>
+        <ul id="recipe-list" class="list"></ul>
+      </div>
 
       <div class="card">
         <div class="row space">
@@ -91,7 +105,11 @@
           <label>Protein (g)<input id="goal-protein" type="number" min="0" step="1" inputmode="numeric" required></label>
           <label>Carbs (g)<input id="goal-carbs" type="number" min="0" step="1" inputmode="numeric" required></label>
           <label>Fat (g)<input id="goal-fat" type="number" min="0" step="1" inputmode="numeric" required></label>
+          <label>Fiber (g)<input id="goal-fiber" type="number" min="0" step="1" inputmode="numeric" required></label>
+          <label>Sodium limit (mg)<input id="goal-sodium" type="number" min="0" step="1" inputmode="numeric" required></label>
+          <label>Creatine (g)<input id="goal-creatine" type="number" min="0" step="0.1" inputmode="decimal" required></label>
         </div>
+        <p class="muted small">Set a goal to 0 to hide its bar. Adults are usually advised to stay under 2000–2300 mg sodium a day (5–6 g salt).</p>
         <button class="btn primary block">Save goals</button>
       </form>
 
@@ -174,10 +192,17 @@
         <label>Carbs (g)<input name="carbs" type="number" min="0" step="any" inputmode="decimal"></label>
         <label>…of which sugars (g)<input name="sugar" type="number" min="0" step="any" inputmode="decimal"></label>
         <label>Fat (g)<input name="fat" type="number" min="0" step="any" inputmode="decimal"></label>
+        <label>…of which saturated (g)<input name="satfat" type="number" min="0" step="any" inputmode="decimal"></label>
         <label>Fiber (g)<input name="fiber" type="number" min="0" step="any" inputmode="decimal"></label>
-        <label>Salt (g)<input name="salt" type="number" min="0" step="any" inputmode="decimal"></label>
         <label>Serving size (g)<input name="serving" type="number" min="0" step="any" inputmode="decimal" placeholder="optional"></label>
+        <label>Salt (g)<input name="salt" type="number" min="0" step="any" inputmode="decimal"></label>
+        <label>Sodium (mg)<input name="sodium" type="number" min="0" step="any" inputmode="decimal"></label>
+        <label>Potassium (mg)<input name="potassium" type="number" min="0" step="any" inputmode="decimal" placeholder="optional"></label>
+        <label>Cholesterol (mg)<input name="cholesterol" type="number" min="0" step="any" inputmode="decimal" placeholder="optional"></label>
+        <label>Creatine (g)<input name="creatine" type="number" min="0" step="any" inputmode="decimal" placeholder="meat/fish only"></label>
+        <label>Estimate creatine<select id="creatine-guess"></select></label>
       </div>
+      <p class="muted small">Salt and sodium fill each other in (salt = sodium × 2.5). Creatine isn't on labels; the estimate uses typical values for raw meat and fish.</p>
       <div class="row wrap actions">
         <button type="button" id="food-delete" class="btn danger">Delete food</button>
         <span class="grow"></span>
@@ -185,6 +210,54 @@
         <button type="submit" class="btn primary">Save</button>
       </div>
     </form>
+  </dialog>
+
+  <!-- Build / log a meal -->
+  <dialog id="meal-dialog" class="sheet">
+    <form id="meal-form" class="sheet-body">
+      <h2 id="meal-title">New meal</h2>
+      <label>Name<input id="m-name" autocomplete="off" placeholder="e.g. Chicken &amp; rice"></label>
+
+      <div class="row space">
+        <h3>Ingredients</h3>
+        <button type="button" id="m-add" class="btn small">+ Add food</button>
+      </div>
+      <ul id="m-items" class="list items"></ul>
+
+      <label>Cooked weight (g)<input id="m-cooked" type="number" min="0" step="any" inputmode="decimal" placeholder="optional: weigh the finished dish"></label>
+      <p id="m-weight" class="muted small"></p>
+
+      <div class="table-wrap"><table id="m-table" class="nutri"></table></div>
+
+      <div class="grid2">
+        <label>Amount eaten (g)<input id="m-grams" type="number" min="0.1" step="any" inputmode="decimal" required></label>
+        <label>Meal<select id="m-meal"></select></label>
+      </div>
+      <div id="m-chips" class="chips">
+        <button type="button" class="chip" data-f="1">Whole</button>
+        <button type="button" class="chip" data-f="0.5">½</button>
+        <button type="button" class="chip" data-f="0.3333">⅓</button>
+        <button type="button" class="chip" data-f="0.25">¼</button>
+      </div>
+
+      <div class="row wrap actions">
+        <button type="button" id="m-delete" class="btn danger">Delete meal</button>
+        <button type="button" id="m-save" class="btn">Save meal</button>
+        <span class="grow"></span>
+        <button type="button" class="btn" data-close>Cancel</button>
+        <button type="submit" id="m-submit" class="btn primary">Add to log</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Pick an ingredient -->
+  <dialog id="pick-dialog" class="sheet">
+    <div class="sheet-body">
+      <h2>Add ingredient</h2>
+      <input id="pick-filter" type="search" placeholder="Search saved foods…" aria-label="Search saved foods">
+      <ul id="pick-list" class="list"></ul>
+      <div class="row actions"><span class="grow"></span><button type="button" class="btn" data-close>Done</button></div>
+    </div>
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>

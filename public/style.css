@@ -162,6 +162,19 @@ label input, label select { margin-top: 4px; }
 .macro-head .lbl { display: block; color: var(--muted); }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
 
+.extras summary {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+  cursor: pointer; list-style: none;
+}
+.extras summary::-webkit-details-marker { display: none; }
+.extras summary b::after { content: " ▸"; color: var(--muted); }
+.extras[open] summary b::after { content: " ▾"; }
+.extras[open] summary .muted { display: none; }
+.extras > p { margin: 12px 0 0; }
+.extra { margin-top: 12px; }
+.extra-head { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; margin-bottom: 4px; }
+.extra-head b.over { color: var(--over); }
+
 .meal-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
 
 .list { list-style: none; margin: 0; padding: 0; }
@@ -179,7 +192,15 @@ label input, label select { margin-top: 4px; }
 .list .kcal { font-weight: 700; white-space: nowrap; text-align: right; }
 .list .kcal small { font-weight: 500; color: var(--muted); }
 
-#food-list { margin-top: 8px; max-height: 420px; overflow-y: auto; }
+#food-list, #pick-list { margin-top: 8px; max-height: 420px; overflow-y: auto; }
+#pick-list { max-height: 55vh; }
+
+/* meal builder ingredient rows */
+.items li { cursor: default; gap: 8px; }
+.items input.grams { width: 76px; flex: none; padding: 6px 8px; text-align: right; }
+.icon-btn.x { width: 32px; height: 32px; font-size: 22px; background: none; color: var(--muted); flex: none; }
+.sheet-body h3 + .btn, .sheet-body .row.space { margin-top: 12px; }
+#m-weight { margin: 0 0 8px; }
 
 .thumb {
   width: 40px; height: 40px;
@@ -249,7 +270,7 @@ dialog.sheet[open] { animation: slide-up .22s ease-out; }
 .nutri td:first-child { text-align: left; }
 .nutri td + td, .nutri th + th { padding-left: 12px; }
 .nutri tr.sub td:first-child { padding-left: 14px; color: var(--muted); }
-.nutri tr.kcal-row td { font-size: 16px; font-weight: 700; }
+.nutri tr.nutri-kcal td { font-size: 16px; font-weight: 700; }
 
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip {

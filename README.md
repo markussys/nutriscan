@@ -7,6 +7,8 @@ see its nutrition facts, and log what you eat against daily calorie and macro go
 - **Nutrition data** from [Open Food Facts](https://world.openfoodfacts.org), a free, open database. No API key needed.
 - **Custom foods** for products that aren't in the database. You enter them once and they're saved.
 - **Daily log** by meal, with calorie, protein, carb and fat goals, plus history and 7-day averages
+- **Saved meals**: combine your foods with amounts, optionally set the cooked weight, and log a whole dish or a portion (½, ⅓, grams). Tweak amounts each time without changing the saved meal.
+- **More nutrients**: saturated fat, fiber, sodium (with a daily limit), potassium, cholesterol and an estimate of natural creatine from meat and fish
 - **No backend.** All data stays in your browser (`localStorage`). Export/import a JSON backup in Settings.
 - **Installable** as an app (PWA): "Add to Home Screen" on your phone.
 

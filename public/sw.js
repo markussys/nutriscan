@@ -1,6 +1,6 @@
 // Service worker: makes the app installable and lets the UI open offline.
 // Barcode lookups still need internet (they go straight to Open Food Facts).
-const CACHE = 'nutriscan-v1';
+const CACHE = 'nutriscan-v2';
 const SHELL = [
   './',
   'index.html',
