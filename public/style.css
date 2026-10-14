@@ -199,10 +199,12 @@ label input, label select { margin-top: 4px; }
   border-radius: 12px;
   overflow: hidden;
   background: #000;
-  aspect-ratio: 4 / 3;
+  min-height: 220px;
 }
-#reader { width: 100%; height: 100%; }
-#reader video { width: 100% !important; height: 100% !important; object-fit: cover; display: block; }
+#reader { width: 100%; }
+/* Keep the video's natural aspect ratio: html5-qrcode maps the scan box onto the
+   video assuming it isn't cropped, so object-fit: cover makes it scan the wrong area. */
+#reader video { width: 100% !important; height: auto !important; display: block; }
 .reader-placeholder {
   position: absolute; inset: 0;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
