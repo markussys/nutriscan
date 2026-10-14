@@ -510,6 +510,13 @@ async function startScanner() {
       { facingMode: 'environment' },
       {
         fps: 12,
+        // Higher resolution + continuous focus: thin 1D barcode bars blur at the default ~480p.
+        videoConstraints: {
+          facingMode: 'environment',
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+          advanced: [{ focusMode: 'continuous' }],
+        },
         qrbox: (w, h) => ({
           width: Math.max(60, Math.floor(Math.min(w * 0.85, 360))),
           height: Math.max(60, Math.floor(Math.min(h * 0.45, 180))),
